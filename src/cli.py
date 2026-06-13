@@ -3,7 +3,7 @@ CLI entry point — ties everything together into a working agent.
 
 Usage:
     python -m src.cli                          # Anthropic (default)
-    python -m src.cli --provider volcengine    # Volcengine (火山引擎)
+    python -m src.cli --provider volcengine    # Volcengine ARK
     python -m src.cli --provider volcengine --model deepseek-v4-flash
     python -m src.cli --prompt "List files"    # Single prompt mode
     python -m src.cli --prompt "Hi" --no-stream  # Disable streaming
@@ -26,8 +26,7 @@ When you need to do something, check if you have a tool for it:
 - To look up current information: use web_search
 - To read a web page: use fetch_url
 
-Be direct and concise. If a tool fails, try an alternative approach.
-Answer in Chinese unless the user asks otherwise (用中文回答)."""
+Be direct and concise. If a tool fails, try an alternative approach."""
 
 
 def create_agent(

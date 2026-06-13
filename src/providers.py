@@ -45,7 +45,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
     ),
     "volcengine": ProviderConfig(
         id="volcengine",
-        name="Volcengine (火山引擎 ARK)",
+        name="Volcengine ARK",
         api_key_env="VOLCENGINE_API_KEY",
         base_url="https://ark.cn-beijing.volces.com/api/coding",
         default_model="deepseek-v4-pro[1m]",

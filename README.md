@@ -1,88 +1,88 @@
 # Agent-based App
 
-从零构建的 AI Agent 学习项目 —— 不用任何框架，理解 Agent 的底层原理。
+A general-purpose AI agent built from scratch in Python — learn how agents work without frameworks.
 
-## 快速开始
+## Quick Start
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 配置 .env（复制 .env.example 并填入 API key）
+# Configure .env (copy .env.example and add your API key)
 cp .env.example .env
 
-# 启动（火山引擎 ARK）
+# Run with Volcengine ARK
 python -m src.cli --provider volcengine
 
-# 或使用 Anthropic
+# Or use Anthropic
 python -m src.cli --provider anthropic
 ```
 
-## 架构
+## Architecture
 
 ```
-User Input → Agent.run_stream() → AgentEvent 流 → CLI 渲染
+User Input → Agent.run_stream() → AgentEvent stream → CLI renders
                 ↑        ↓
-           LLMClient ── LLM API (Anthropic / 火山引擎)
-                           ↓
-              返回 text_delta / tool_use 事件
-                           ↓
-              工具处理器在本地执行
-                           ↓
-              结果以事件形式回传，继续循环
+           LLMClient ── LLM API (Anthropic / Volcengine ARK)
+                            ↓
+              returns text_delta / tool_use events
+                            ↓
+              Tool handlers execute locally
+                            ↓
+              Results fed back as events, loop continues
 ```
 
-遵循 **ReAct 模式**：Think → Act → Observe → 循环直到 Done。
+Follows the **ReAct pattern**: Think → Act → Observe → Loop until Done.
 
-## 项目结构
+## Project Structure
 
 ```
 src/
-├── agent.py          # Agent 主循环（事件驱动）
-├── llm.py            # LLM API 封装（batch + streaming）
-├── cli.py            # 命令行入口
-├── conversation.py   # 多轮对话记忆管理
-├── providers.py      # Provider 注册（Anthropic / 火山引擎）
+├── agent.py          # Agent main loop (event-driven)
+├── llm.py            # LLM API wrapper (batch + streaming)
+├── cli.py            # CLI entry point
+├── conversation.py   # Multi-turn conversation memory
+├── providers.py      # Provider registry (Anthropic / Volcengine)
 └── tools/
     ├── __init__.py   # Tool + ToolRegistry
-    ├── file_tools.py # 文件读写、目录列表
-    └── web_tools.py  # 网页搜索、URL 抓取
+    ├── file_tools.py # File read/write, directory listing
+    └── web_tools.py  # Web search, URL fetching
 tests/
-├── test_agent.py     # Agent 循环测试
-├── test_llm.py       # LLM 客户端测试
-└── test_tools.py     # 工具系统测试
+├── test_agent.py     # Agent loop tests
+├── test_llm.py       # LLM client tests
+└── test_tools.py     # Tool system tests
 docs/
-├── pi-analysis.md    # pi 项目架构分析
-└── todo-pi-reimplementation.md  # Python 重写 pi core-agent 计划
+├── pi-analysis.md    # Architecture analysis of pi
+└── todo-pi-reimplementation.md  # Python reimplementation roadmap
 ```
 
-## 特性
+## Features
 
-- **流式输出**：文字逐字出现，工具调用实时显示
-- **事件驱动**：Agent 发出事件，CLI 订阅渲染
-- **多 Provider**：Anthropic / 火山引擎 ARK / 任意 Anthropic 兼容端点
-- **多轮记忆**：跨轮次对话上下文
-- **工具系统**：文件读写、Web 搜索、URL 抓取
+- **Streaming output**: text appears in real-time, tool calls displayed as they happen
+- **Event-driven**: agent emits events, CLI subscribes and renders
+- **Multi-provider**: Anthropic / Volcengine ARK / any Anthropic-compatible endpoint
+- **Multi-turn memory**: cross-turn conversation context
+- **Tool system**: file I/O, web search, URL fetching
 
-## 命令
+## Commands
 
 ```bash
-# 单次提问
+# Single prompt
 python -m src.cli --prompt "List files"
 
-# 选择 Provider
+# Choose provider
 python -m src.cli -p volcengine -m deepseek-v4-flash
 
-# 禁用流式
+# Disable streaming
 python -m src.cli --prompt "Hi" --no-stream
 
-# 查看可用 Provider
+# List available providers
 python -m src.cli --list-providers
 
-# 运行测试
+# Run tests
 pytest tests/ -v
 ```
 
-## 参考
+## Reference
 
-本项目从 [earendil-works/pi](https://github.com/earendil-works/pi) 中借鉴了事件驱动架构和 Provider 注册模式。详见 `docs/pi-analysis.md`。
+This project draws from [earendil-works/pi](https://github.com/earendil-works/pi) — event-driven architecture and provider registry patterns. See `docs/pi-analysis.md` for details.

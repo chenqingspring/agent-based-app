@@ -1,84 +1,84 @@
-# Python 重写 pi core-agent 任务清单
+# Python Rewrite of pi core-agent — Task List
 
-目标：用 Python 完整重写 pi 的 agent-core 层，重点关注事件循环、Hook 系统、工具执行引擎。
-
----
-
-## Phase 1：基础设施
-
-- [ ] 1.1 项目初始化：`pip install anthropic httpx python-dotenv`
-- [ ] 1.2 类型定义：`AgentMessage`, `ToolDefinition`, `ToolCall`, `AgentEvent` 等核心类型
-- [ ] 1.3 EventStream 实现：`EventStream[T, R]` 基类（async queue + callback，参考 pi 的 `event-stream.ts`）
-- [ ] 1.4 Provider 注册机制：`register_api_provider()` + `stream_simple()` 分发
-
-## Phase 2：Agent 核心循环
-
-- [ ] 2.1 `AgentLoopConfig` 配置类（model, tools, hooks, maxTurns...）
-- [ ] 2.2 内层循环：`has_more_tool_calls` + `pending_messages` 判断
-- [ ] 2.3 外层循环：follow-up 消息轮询
-- [ ] 2.4 Steering 消息注入（在 turn boundary 插入）
-- [ ] 2.5 `convert_to_llm()` — AgentMessage → LLM Message 转换
-
-## Phase 3：Hook 系统
-
-- [ ] 3.1 Hook 接口定义（`before_tool_call`, `after_tool_call`, `should_stop_after_turn`, `prepare_next_turn`, `transform_context`, `get_api_key`）
-- [ ] 3.2 Hook 在 Agent 循环中的注入点
-- [ ] 3.3 默认 Hook 实现
-
-## Phase 4：工具执行引擎
-
-- [ ] 4.1 `sequential` 模式（逐个 prepare → execute → finalize）
-- [ ] 4.2 `parallel` 模式（prepare 串行 → execute 并发 → 结果按序 emit）
-- [ ] 4.3 可插拔操作接口（如 `BashOperations` 可替换为 subprocess / SSH / Docker）
-- [ ] 4.4 工具错误处理（编码为事件，不抛异常）
-
-## Phase 5：会话管理
-
-- [ ] 5.1 `AgentSession` 类（工具注册 + 持久化 + 生命周期）
-- [ ] 5.2 对话状态持久化（自动保存每个事件后）
-- [ ] 5.3 上下文压缩（compaction）—— 超长对话自动摘要
-- [ ] 5.4 会话恢复（resume / fork / continue）
-
-## Phase 6：高级特性
-
-- [ ] 6.1 自动重试（transient error → exponential backoff）
-- [ ] 6.2 模型切换（prepare_next_turn 中更换模型）
-- [ ] 6.3 Abort 机制（AbortController 信号传播）
-- [ ] 6.4 流式输出（`async for event in agent.run_stream()`）
-
-## Phase 7：CLI 和集成
-
-- [ ] 7.1 CLI 入口（async REPL + single prompt）
-- [ ] 7.2 配置管理（全局设置 + 项目级覆盖）
-- [ ] 7.3 模型注册和 API key 管理
+Goal: fully rewrite pi's agent-core layer in Python, focusing on the event loop, hook system, and tool execution engine.
 
 ---
 
-## 优先级
+## Phase 1: Foundation
 
-| 优先级 | Phase | 原因 |
-|--------|-------|------|
-| 🔴 P0 | 1, 2 | 核心事件循环必须先跑通 |
-| 🟡 P1 | 3, 4 | Hook + 工具引擎是 pi 的核心差异化能力 |
-| 🟡 P1 | 6.4 | 流式输出是用户体验的基础 |
-| 🟢 P2 | 5 | 会话管理是生产级必需但可以后做 |
-| 🟢 P3 | 6.1-6.3, 7 | 锦上添花 |
+- [ ] 1.1 Project init: `pip install anthropic httpx python-dotenv`
+- [ ] 1.2 Type definitions: `AgentMessage`, `ToolDefinition`, `ToolCall`, `AgentEvent`, and other core types
+- [ ] 1.3 EventStream: `EventStream[T, R]` base class (async queue + callback, based on pi's `event-stream.ts`)
+- [ ] 1.4 Provider registry: `register_api_provider()` + `stream_simple()` dispatch
+
+## Phase 2: Agent Core Loop
+
+- [ ] 2.1 `AgentLoopConfig` class (model, tools, hooks, maxTurns...)
+- [ ] 2.2 Inner loop: `has_more_tool_calls` + `pending_messages` logic
+- [ ] 2.3 Outer loop: follow-up message polling
+- [ ] 2.4 Steering message injection (at turn boundary)
+- [ ] 2.5 `convert_to_llm()` — AgentMessage → LLM Message conversion
+
+## Phase 3: Hook System
+
+- [ ] 3.1 Hook interface definition (`before_tool_call`, `after_tool_call`, `should_stop_after_turn`, `prepare_next_turn`, `transform_context`, `get_api_key`)
+- [ ] 3.2 Hook injection points in the agent loop
+- [ ] 3.3 Default hook implementations
+
+## Phase 4: Tool Execution Engine
+
+- [ ] 4.1 `sequential` mode (prepare → execute → finalize one at a time)
+- [ ] 4.2 `parallel` mode (prepare serial → execute concurrent → emit results in source order)
+- [ ] 4.3 Pluggable operation interfaces (e.g., `BashOperations` swappable for subprocess / SSH / Docker)
+- [ ] 4.4 Tool error handling (encode as events, never throw)
+
+## Phase 5: Session Management
+
+- [ ] 5.1 `AgentSession` class (tool registration + persistence + lifecycle)
+- [ ] 5.2 Conversation state persistence (auto-save after every event)
+- [ ] 5.3 Context compaction — auto-summarize long conversations
+- [ ] 5.4 Session resumption (resume / fork / continue)
+
+## Phase 6: Advanced Features
+
+- [ ] 6.1 Auto-retry (transient error → exponential backoff)
+- [ ] 6.2 Model switching (swap model in `prepare_next_turn`)
+- [ ] 6.3 Abort mechanism (signal propagation)
+- [ ] 6.4 Streaming output (`async for event in agent.run_stream()`)
+
+## Phase 7: CLI and Integration
+
+- [ ] 7.1 CLI entry point (async REPL + single prompt)
+- [ ] 7.2 Configuration management (global settings + project-level overrides)
+- [ ] 7.3 Model registry and API key management
 
 ---
 
-## 预计文件结构
+## Priority
+
+| Priority | Phase | Reason |
+|----------|-------|--------|
+| 🔴 P0 | 1, 2 | Core event loop must work first |
+| 🟡 P1 | 3, 4 | Hooks + tool engine are pi's core differentiators |
+| 🟡 P1 | 6.4 | Streaming is fundamental to UX |
+| 🟢 P2 | 5 | Session management needed for production, but can wait |
+| 🟢 P3 | 6.1-6.3, 7 | Nice-to-have |
+
+---
+
+## Planned File Structure
 
 ```
 pi-core/
 ├── src/
 │   ├── __init__.py
-│   ├── types.py           # 核心类型定义
-│   ├── event_stream.py    # EventStream 基类
-│   ├── api_registry.py    # Provider 注册和分发
-│   ├── agent_loop.py      # 双层事件循环
-│   ├── agent.py           # Agent 类（状态管理）
-│   ├── hooks.py           # Hook 接口和注入点
-│   ├── tool_executor.py   # 工具执行引擎
+│   ├── types.py           # Core type definitions
+│   ├── event_stream.py    # EventStream base class
+│   ├── api_registry.py    # Provider registration and dispatch
+│   ├── agent_loop.py      # Two-level event loop
+│   ├── agent.py           # Agent class (state management)
+│   ├── hooks.py           # Hook interface and injection points
+│   ├── tool_executor.py   # Tool execution engine
 │   └── session.py         # AgentSession
 ├── tests/
 ├── requirements.txt
