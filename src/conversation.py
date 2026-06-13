@@ -73,5 +73,12 @@ class Conversation:
         """Clear all messages but keep the system prompt."""
         self.messages = []
 
+    def __bool__(self) -> bool:
+        """Conversation is always truthy — even when empty.
+
+        Without this, Python falls back to __len__, making an empty Conversation
+        falsy, which causes "if conversation:" to fail in run()."""
+        return True
+
     def __len__(self):
         return len(self.messages)

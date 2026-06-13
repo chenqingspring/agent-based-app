@@ -2,8 +2,36 @@
 
 import pytest
 from src.agent import Agent, ToolResult
+from src.conversation import Conversation
 from src.llm import LLMResponse, ToolCall
 from src.tools import ToolRegistry
+
+
+class TestConversation:
+    """Tests for Conversation integration — especially the __bool__ fix."""
+
+    def test_bool_is_always_true(self):
+        """Empty conversation must be truthy. Python uses __len__ for bool()
+        when __bool__ is not defined, so len=0 would mean bool=False."""
+        conv = Conversation()
+        assert bool(conv) is True
+        conv.add_user_message("Hi")
+        assert bool(conv) is True
+
+    def test_multi_turn_memory(self):
+        """Messages added to a conversation persist across turns."""
+        conv = Conversation(system="Test")
+        conv.add_user_message("I'm Bob")
+        conv.add_assistant_message("Hi Bob!")
+        assert len(conv) == 2
+        assert conv.to_messages()[0]["content"] == "I'm Bob"
+
+    def test_clear(self):
+        conv = Conversation(system="Test")
+        conv.add_user_message("Hello")
+        conv.add_assistant_message("Hi")
+        conv.clear()
+        assert len(conv) == 0
 
 
 class TestAgentToolExecution:

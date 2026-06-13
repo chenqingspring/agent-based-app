@@ -16,6 +16,7 @@ The ReAct loop:
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from src.conversation import Conversation
 from src.llm import LLMClient, LLMResponse, ToolCall
 
 
@@ -37,10 +38,8 @@ class Agent:
     A general-purpose agent that can use tools to accomplish tasks.
 
     Usage:
-        agent = Agent(
-            system="You are a helpful assistant.",
-            tools=[list_directory_tool, read_file_tool],
-        )
+        agent = Agent(system="You are a helpful assistant.")
+        agent.register_tool(...)
         result = agent.run("What's in this project?")
         print(result)
     """
@@ -77,21 +76,27 @@ class Agent:
         self.tools.append(definition)
         self._tool_handlers[definition["name"]] = handler
 
-    def run(self, user_message: str) -> str:
+    def run(
+        self,
+        user_message: str,
+        conversation: Conversation | None = None,
+    ) -> str:
         """
         Run the agent loop on a user message.
 
-        The loop:
-        1. Send messages to Claude
-        2. If Claude responds with text → collect it (may be followed by tool_use)
-        3. If Claude makes tool calls → execute them, add results, loop back
-        4. If Claude says end_turn → we're done
+        If a Conversation is provided, it maintains multi-turn memory across
+        calls — previous messages are included as context and the final
+        assistant response is appended back.
 
         Returns the final text response.
         """
-        messages: list[dict[str, Any]] = [
-            {"role": "user", "content": user_message}
-        ]
+        # Build the initial message list: either from shared conversation or fresh
+        if conversation is not None:
+            conversation.add_user_message(user_message)
+            messages = conversation.to_messages()
+        else:
+            messages = [{"role": "user", "content": user_message}]
+
         final_text: list[str] = []
 
         for turn in range(self.MAX_TURNS):
@@ -105,40 +110,41 @@ class Agent:
             if response.text:
                 final_text.append(response.text)
 
-            # If the model is done thinking, return the accumulated text
+            # Done — return the full response
             if response.stop_reason == "end_turn":
-                return "\n".join(final_text)
+                result = "\n".join(final_text)
+                if conversation is not None:
+                    conversation.add_assistant_message(result)
+                return result
 
-            # If the model wants to use tools, execute them
+            # Model wants to use tools — execute them and feed results back
             if response.stop_reason == "tool_use":
-                # Build the assistant message with tool_use blocks
                 assistant_content = self._build_assistant_content(response)
-
-                # Execute each tool and collect results
                 tool_results = [
                     self._execute_tool(tc) for tc in response.tool_calls
                 ]
 
-                # Add assistant message + tool results to conversation
                 messages.append({"role": "assistant", "content": assistant_content})
                 messages.append({
                     "role": "user",
                     "content": self._build_tool_result_content(tool_results),
                 })
-
                 continue
 
-            # stop_reason == "max_tokens" or other — model was cut off
-            if response.text:
-                messages.append({
-                    "role": "assistant",
-                    "content": response.text,
-                })
-                messages.append({
-                    "role": "user",
-                    "content": "You were cut off. Please continue from where you stopped.",
-                })
-                continue
+            # stop_reason == "max_tokens" — model was cut off mid-response.
+            # Use _build_assistant_content to correctly include both text and
+            # any tool_use blocks (the model may have started a tool call before
+            # hitting the token limit).
+            assistant_content = self._build_assistant_content(response)
+            if assistant_content:
+                messages.append({"role": "assistant", "content": assistant_content})
+            messages.append({
+                "role": "user",
+                "content": (
+                    "You were cut off due to output length. "
+                    "Please continue from where you stopped."
+                ),
+            })
 
         return "\n".join(final_text) or "(Agent reached max turns with no response)"
 
@@ -196,8 +202,9 @@ class Agent:
         ]
 
     def run_interactive(self):
-        """Run the agent in an interactive REPL loop."""
-        print("Agent ready. Type 'quit' or 'exit' to stop.\n")
+        """Run the agent in an interactive REPL loop with multi-turn memory."""
+        conversation = Conversation(system=self.system)
+        print("Agent ready. Type 'quit' or 'exit' to stop, 'clear' to reset.\n")
 
         while True:
             try:
@@ -210,8 +217,12 @@ class Agent:
                 continue
             if user_input.lower() in ("quit", "exit"):
                 break
+            if user_input.lower() == "clear":
+                conversation.clear()
+                print("Conversation cleared.\n")
+                continue
 
-            print()  # blank line before response
-            response = self.run(user_input)
+            print()
+            response = self.run(user_input, conversation=conversation)
             print(response)
-            print()  # blank line after response
+            print()
