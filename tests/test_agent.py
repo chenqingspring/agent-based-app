@@ -128,3 +128,119 @@ class TestMaxTurns:
     def test_max_turns_default(self):
         agent = Agent(system="Test", llm_client=None)
         assert agent.MAX_TURNS == 25
+
+
+class TestAgentEvent:
+    """AgentEvent is a dataclass — verify its structure."""
+
+    def test_text_delta_event(self):
+        from src.agent import AgentEvent
+        event = AgentEvent(type="text_delta", text="Hello")
+        assert event.type == "text_delta"
+        assert event.text == "Hello"
+
+    def test_tool_call_event(self):
+        from src.agent import AgentEvent
+        event = AgentEvent(
+            type="tool_call",
+            tool_name="read_file",
+            tool_input={"path": "/tmp"},
+        )
+        assert event.type == "tool_call"
+        assert event.tool_name == "read_file"
+
+    def test_tool_result_event(self):
+        from src.agent import AgentEvent
+        event = AgentEvent(
+            type="tool_result",
+            tool_name="read_file",
+            tool_output="file contents",
+        )
+        assert event.type == "tool_result"
+        assert event.tool_output == "file contents"
+
+    def test_done_event(self):
+        from src.agent import AgentEvent
+        event = AgentEvent(type="done", final_text="Complete response")
+        assert event.type == "done"
+        assert event.final_text == "Complete response"
+
+
+class TestAgentStreaming:
+    """Test that run_stream() yields correct events."""
+
+    def test_run_collects_stream_events(self):
+        """run() returns text collected from run_stream() events."""
+        from src.agent import Agent, AgentEvent
+        from src.llm import StreamEvent, ToolCall
+
+        # Create a mock LLM client that yields stream events
+        class MockLLM:
+            def send_stream(self, system, messages, tools=None, max_tokens=4096):
+                yield StreamEvent(type="text_delta", text="Hello ")
+                yield StreamEvent(type="text_delta", text="world!")
+                yield StreamEvent(type="done", stop_reason="end_turn")
+
+        agent = Agent(system="Test", llm_client=MockLLM())
+        result = agent.run("Hi")
+        assert result == "Hello world!"
+
+    def test_run_stream_yields_text_deltas(self):
+        """run_stream() forwards text_delta events from the LLM."""
+        from src.agent import Agent
+        from src.llm import StreamEvent
+
+        class MockLLM:
+            def send_stream(self, system, messages, tools=None, max_tokens=4096):
+                yield StreamEvent(type="text_delta", text="A")
+                yield StreamEvent(type="text_delta", text="B")
+                yield StreamEvent(type="done", stop_reason="end_turn")
+
+        agent = Agent(system="Test", llm_client=MockLLM())
+        events = list(agent.run_stream("Hi"))
+        assert events[0].type == "text_delta"
+        assert events[0].text == "A"
+        assert events[2].type == "done"
+        assert events[2].final_text == "AB"
+
+    def test_run_stream_with_tool_call(self):
+        """run_stream() yields tool_call and tool_result events."""
+        from src.agent import Agent
+        from src.llm import StreamEvent, ToolCall
+
+        class MockLLM:
+            def send_stream(self, system, messages, tools=None, max_tokens=4096):
+                yield StreamEvent(
+                    type="tool_use",
+                    tool_call=ToolCall(id="tc_1", name="add", input={"a": 1, "b": 2}),
+                )
+                yield StreamEvent(type="done", stop_reason="tool_use")
+
+        agent = Agent(system="Test", llm_client=MockLLM())
+        agent.register_tool(
+            {"name": "add", "description": "Add two numbers",
+             "input_schema": {"type": "object", "properties": {
+                 "a": {"type": "integer"}, "b": {"type": "integer"}},
+                 "required": ["a", "b"]}},
+            lambda a, b: a + b,
+        )
+
+        events = list(agent.run_stream("Add 1+2"))
+        types = [e.type for e in events]
+        assert "tool_call" in types
+        assert "tool_result" in types
+
+    def test_run_stream_error(self):
+        """run_stream() yields done with error on LLM error."""
+        from src.agent import Agent
+        from src.llm import StreamEvent
+
+        class MockLLM:
+            def send_stream(self, system, messages, tools=None, max_tokens=4096):
+                yield StreamEvent(type="error", error="API down")
+
+        agent = Agent(system="Test", llm_client=MockLLM())
+        events = list(agent.run_stream("Hi"))
+        assert events[0].type == "done"
+        assert events[0].is_error
+        assert "API down" in events[0].final_text

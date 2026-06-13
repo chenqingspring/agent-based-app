@@ -13,11 +13,12 @@ The ReAct loop:
     → Done. Print response.
 """
 
+from collections.abc import Generator
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from src.conversation import Conversation
-from src.llm import LLMClient, LLMResponse, ToolCall
+from src.llm import LLMClient, LLMResponse, StreamEvent, ToolCall
 
 
 @dataclass
@@ -30,6 +31,33 @@ class ToolResult:
     is_error: bool = False
 
 
+# ---------------------------------------------------------------------------
+# Agent events — inspired by pi's agent-loop.ts event protocol
+# ---------------------------------------------------------------------------
+
+AgentEventType = Literal["text_delta", "tool_call", "tool_result", "done"]
+
+
+@dataclass
+class AgentEvent:
+    """Events emitted by the agent loop during execution.
+
+    Types:
+        text_delta  — a text chunk from the LLM (streaming)
+        tool_call   — the agent is executing a tool
+        tool_result — the result of a tool execution
+        done        — agent loop complete, final response ready
+    """
+
+    type: AgentEventType
+    text: str = ""
+    tool_name: str = ""
+    tool_input: dict[str, Any] = field(default_factory=dict)
+    tool_output: str = ""
+    is_error: bool = False
+    final_text: str = ""
+
+
 _UNSET = object()
 
 
@@ -37,11 +65,21 @@ class Agent:
     """
     A general-purpose agent that can use tools to accomplish tasks.
 
+    Two modes:
+    - run(): batch mode, returns final response
+    - run_stream(): event-driven, yields events for real-time display
+
     Usage:
         agent = Agent(system="You are a helpful assistant.")
         agent.register_tool(...)
+
+        # Batch mode
         result = agent.run("What's in this project?")
-        print(result)
+
+        # Streaming mode
+        for event in agent.run_stream("What's in this project?"):
+            if event.type == "text_delta":
+                print(event.text, end="", flush=True)
     """
 
     MAX_TURNS = 25  # Safety limit — prevent infinite loops
@@ -76,84 +114,193 @@ class Agent:
         self.tools.append(definition)
         self._tool_handlers[definition["name"]] = handler
 
+    # ------------------------------------------------------------------
+    # Batch mode — returns the final response
+    # ------------------------------------------------------------------
+
     def run(
         self,
         user_message: str,
         conversation: Conversation | None = None,
     ) -> str:
-        """
-        Run the agent loop on a user message.
+        """Run the agent and return the full text response (non-streaming)."""
+        parts: list[str] = []
+        for event in self.run_stream(user_message, conversation=conversation):
+            if event.type == "text_delta":
+                parts.append(event.text)
+        return event.final_text if event.type == "done" else "".join(parts)
 
-        If a Conversation is provided, it maintains multi-turn memory across
-        calls — previous messages are included as context and the final
-        assistant response is appended back.
+    # ------------------------------------------------------------------
+    # Streaming mode — yields events in real-time
+    # ------------------------------------------------------------------
 
-        Returns the final text response.
+    def run_stream(
+        self,
+        user_message: str,
+        conversation: Conversation | None = None,
+    ) -> Generator[AgentEvent, None, None]:
         """
-        # Build the initial message list: either from shared conversation or fresh
+        Run the agent loop, yielding events as they happen.
+
+        This is the main entry point for streaming. The CLI subscribes to
+        these events and renders them in real-time.
+        """
+        # Build the initial message list
         if conversation is not None:
             conversation.add_user_message(user_message)
             messages = conversation.to_messages()
         else:
             messages = [{"role": "user", "content": user_message}]
 
-        final_text: list[str] = []
+        all_text: list[str] = []
 
         for turn in range(self.MAX_TURNS):
-            response = self.llm.send(
+            # --- Stream LLM response ---
+            text_in_turn: list[str] = []
+            tool_calls_in_turn: list[ToolCall] = []
+            stop_reason = "end_turn"
+
+            for se in self.llm.send_stream(
                 system=self.system,
                 messages=messages,
                 tools=self.tools if self.tools else None,
-            )
+            ):
+                if se.type == "text_delta":
+                    text_in_turn.append(se.text)
+                    yield AgentEvent(type="text_delta", text=se.text)
 
-            # Collect any text in this response
-            if response.text:
-                final_text.append(response.text)
+                elif se.type == "tool_use":
+                    tool_calls_in_turn.append(se.tool_call)
 
-            # Done — return the full response
-            if response.stop_reason == "end_turn":
-                result = "\n".join(final_text)
+                elif se.type == "error":
+                    yield AgentEvent(
+                        type="done",
+                        final_text=f"Error: {se.error}",
+                        is_error=True,
+                    )
+                    return
+
+                elif se.type == "done":
+                    stop_reason = se.stop_reason
+
+            all_text.extend(text_in_turn)
+
+            # --- Handle stop reasons ---
+
+            if stop_reason == "end_turn":
+                result = "".join(all_text)
                 if conversation is not None:
                     conversation.add_assistant_message(result)
-                return result
+                yield AgentEvent(type="done", final_text=result)
+                return
 
-            # Model wants to use tools — execute them and feed results back
-            if response.stop_reason == "tool_use":
-                assistant_content = self._build_assistant_content(response)
-                tool_results = [
-                    self._execute_tool(tc) for tc in response.tool_calls
-                ]
-
+            if stop_reason == "tool_use" and tool_calls_in_turn:
+                # Build the assistant message with text + tool_use blocks
+                assistant_content = self._build_tool_use_content(
+                    "".join(text_in_turn), tool_calls_in_turn
+                )
                 messages.append({"role": "assistant", "content": assistant_content})
+
+                # Execute each tool and yield events
+                tool_results = []
+                for tc in tool_calls_in_turn:
+                    yield AgentEvent(
+                        type="tool_call",
+                        tool_name=tc.name,
+                        tool_input=tc.input,
+                    )
+                    result = self._execute_tool(tc)
+                    tool_results.append(result)
+                    yield AgentEvent(
+                        type="tool_result",
+                        tool_name=tc.name,
+                        tool_output=result.output,
+                        is_error=result.is_error,
+                    )
+
                 messages.append({
                     "role": "user",
                     "content": self._build_tool_result_content(tool_results),
                 })
+                # Loop back for the LLM to process tool results
                 continue
 
-            # stop_reason == "max_tokens" — model was cut off mid-response.
-            # Use _build_assistant_content to correctly include both text and
-            # any tool_use blocks (the model may have started a tool call before
-            # hitting the token limit).
-            assistant_content = self._build_assistant_content(response)
-            if assistant_content:
-                messages.append({"role": "assistant", "content": assistant_content})
-            messages.append({
-                "role": "user",
-                "content": (
-                    "You were cut off due to output length. "
-                    "Please continue from where you stopped."
-                ),
-            })
+            if stop_reason == "max_tokens":
+                assistant_content = self._build_tool_use_content(
+                    "".join(text_in_turn), tool_calls_in_turn
+                )
+                if assistant_content:
+                    messages.append({"role": "assistant", "content": assistant_content})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "You were cut off due to output length. "
+                        "Please continue from where you stopped."
+                    ),
+                })
+                # Loop back for continuation
+                continue
 
-        return "\n".join(final_text) or "(Agent reached max turns with no response)"
+        final = "".join(all_text) or "(Agent reached max turns with no response)"
+        if conversation is not None:
+            conversation.add_assistant_message(final)
+        yield AgentEvent(type="done", final_text=final)
 
-    def _build_assistant_content(self, response: LLMResponse) -> list[dict[str, Any]]:
-        """Build the assistant message content with text and tool_use blocks."""
+    # ------------------------------------------------------------------
+    # Interactive REPL
+    # ------------------------------------------------------------------
+
+    def run_interactive(self, stream: bool = True):
+        """Run the agent in an interactive REPL loop with multi-turn memory."""
+        conversation = Conversation(system=self.system)
+        print("Agent ready. Type 'quit' or 'exit' to stop, 'clear' to reset.\n")
+
+        while True:
+            try:
+                user_input = input("> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+
+            if not user_input:
+                continue
+            if user_input.lower() in ("quit", "exit"):
+                break
+            if user_input.lower() == "clear":
+                conversation.clear()
+                print("Conversation cleared.\n")
+                continue
+
+            print()
+            if stream:
+                for event in self.run_stream(user_input, conversation=conversation):
+                    if event.type == "text_delta":
+                        print(event.text, end="", flush=True)
+                    elif event.type == "tool_call":
+                        print(f"\n  ⚙ {event.tool_name}({self._fmt_tool_args(event.tool_input)})", flush=True)
+                    elif event.type == "tool_result":
+                        summary = event.tool_output[:200].replace("\n", " ")
+                        status = "✗" if event.is_error else "✓"
+                        print(f" → {status} {summary}", flush=True)
+                print()
+                print()
+            else:
+                response = self.run(user_input, conversation=conversation)
+                print(response)
+                print()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _build_tool_use_content(
+        self, text: str, tool_calls: list[ToolCall]
+    ) -> list[dict[str, Any]]:
+        """Build assistant message content with text and tool_use blocks."""
         content: list[dict[str, Any]] = []
-        if response.text:
-            content.append({"type": "text", "text": response.text})
-        for tc in response.tool_calls:
+        if text:
+            content.append({"type": "text", "text": text})
+        for tc in tool_calls:
             content.append({
                 "type": "tool_use",
                 "id": tc.id,
@@ -161,6 +308,10 @@ class Agent:
                 "input": tc.input,
             })
         return content
+
+    def _build_assistant_content(self, response: LLMResponse) -> list[dict[str, Any]]:
+        """Build assistant content from a batch LLMResponse (kept for backward compat)."""
+        return self._build_tool_use_content(response.text, response.tool_calls)
 
     def _execute_tool(self, tool_call: ToolCall) -> ToolResult:
         """Execute a single tool call and return the result."""
@@ -201,28 +352,13 @@ class Agent:
             for r in results
         ]
 
-    def run_interactive(self):
-        """Run the agent in an interactive REPL loop with multi-turn memory."""
-        conversation = Conversation(system=self.system)
-        print("Agent ready. Type 'quit' or 'exit' to stop, 'clear' to reset.\n")
-
-        while True:
-            try:
-                user_input = input("> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                break
-
-            if not user_input:
-                continue
-            if user_input.lower() in ("quit", "exit"):
-                break
-            if user_input.lower() == "clear":
-                conversation.clear()
-                print("Conversation cleared.\n")
-                continue
-
-            print()
-            response = self.run(user_input, conversation=conversation)
-            print(response)
-            print()
+    @staticmethod
+    def _fmt_tool_args(input_dict: dict) -> str:
+        """Format tool input args for display."""
+        parts = []
+        for k, v in input_dict.items():
+            s = str(v)
+            if len(s) > 50:
+                s = s[:47] + "..."
+            parts.append(f"{k}={s}")
+        return ", ".join(parts)
